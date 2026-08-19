@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# YOUR VOICE IS NOT PUBLIC. The templates are tracked; anything you fill in is not.
+corpus/exemplars.jsonl
+corpus/corrections.jsonl
+corpus/fingerprint.json

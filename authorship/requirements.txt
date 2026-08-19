@@ -1,0 +1,22 @@
+# The optional authorship metric, and NOTHING else in this project, needs these.
+#
+# The rest of voice-loop runs on the Python standard library alone. These four
+# packages are roughly 2GB and are needed by exactly one advisory metric that is
+# OFF by default. Putting them in a top-level requirements file would make every
+# checkout pay for a metric most runs never compute, and would read as "this
+# project needs torch", which is false. The scope of the file is the scope of
+# the dependency.
+#
+# torch, transformers   LUAR-MUD is a transformers model over torch tensors.
+# einops                LUAR-MUD's REMOTE code (trust_remote_code=True) imports
+#                       it. It is not a dependency of transformers, so it stays
+#                       invisible until the model actually loads.
+# numpy                 pulled in transitively; named because a transitive pin
+#                       is not a declaration.
+#
+# Pin the versions you actually resolved and ran, read back out of the built
+# environment. Versions typed from memory are guesses wearing a pin's clothes.
+torch
+transformers
+einops
+numpy
