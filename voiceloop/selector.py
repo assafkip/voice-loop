@@ -41,6 +41,13 @@ def _channel_ok(row, channel):
 def eligible(rows, channel, slot_kind="post", target_words=None):
     """(primary, fallback) pools, each sorted by id for stable rotation.
 
+    A row with `eligible_for_voice_reference` explicitly False is OUT of both
+    tiers, anchors included (2026-08-23). Before this line the field was dead:
+    the corpus carried it, curation flipped it, and selection never read it, so
+    a hype-register post ("It's ALIVE!!!") sat as an anchor in every linkedin
+    prompt while believing it was retired. Absent or null keeps the row live --
+    retirement is an explicit act, recorded on the row with a reason.
+
     LENGTH PROMOTES article-excerpt INTO THE PRIMARY TIER (2026-08-13). An article
     excerpt is long-form writing; demoting it to fallback is right for a 280-char
     slot and wrong for a long one. Measured before changing it: with linkedin's 12
@@ -57,6 +64,7 @@ def eligible(rows, channel, slot_kind="post", target_words=None):
     """
     tiers = ELIGIBLE_KINDS.get(slot_kind, ELIGIBLE_KINDS["post"])
     primary_kinds, fallback_kinds = tiers[0], tiers[1]
+    rows = [r for r in rows if r.get("eligible_for_voice_reference") is not False]
     if (target_words is not None and target_words >= LONG_WORDS
             and slot_kind == "post"):
         primary_kinds = tuple(primary_kinds) + tuple(fallback_kinds)

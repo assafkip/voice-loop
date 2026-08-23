@@ -190,12 +190,34 @@ def report(text, channel, path=None):
         out["flags"].append("no-reference: fewer than 8 posts on this channel")
         return out
     if channel == "x":
-        out["char_rule"] = {"kind": "dwell-floor", "floor": X_DWELL_FLOOR_CHARS}
+        # THE CEILING IS READ, NEVER COPIED. `x_format.X_CEILING_CHARS` is the single
+        # writer of that number; this module is the advisory reader. Two copies of a
+        # threshold is the second-source-of-truth scar the docstring above already
+        # names, and it would show up here as an advisory report disagreeing with the
+        # gate that actually blocks -- the worst shape, because the report is what a
+        # human reads when deciding whether the gate is right.
+        #
+        # Imported inside the function, not at module scope: this module is shared and
+        # its docstring records that it ships in two packages. `sameness.py` reaches for
+        # x_format the same way and for the same reason.
+        from . import x_format
+        out["char_rule"] = {"kind": "dwell-floor", "floor": X_DWELL_FLOOR_CHARS,
+                            "ceiling": x_format.X_CEILING_CHARS}
+        # BOTH DIRECTIONS, and the missing one is why this exists (2026-08-20). The
+        # floor shipped alone, so `report` had an opinion about a draft being too short
+        # and none at all about a draft being too long. A 1,586-character draft came
+        # back with zero flags from the one function whose whole job is "is this shaped
+        # like him".
         if got["chars"] < X_DWELL_FLOOR_CHARS:
             out["flags"].append(
                 f"below the X dwell floor: {got['chars']} chars, under {X_DWELL_FLOOR_CHARS}. "
                 f"It will not earn an expand, so it cannot collect the dwell or reply "
                 f"signals the channel pays for.")
+        elif got["chars"] > x_format.X_CEILING_CHARS:
+            out["flags"].append(
+                f"over the X ceiling: {got['chars']} chars, past "
+                f"{x_format.X_CEILING_CHARS}. Longer than he ships on X. This is a "
+                f"blocking gate, not a nudge -- `x_format.length_violations` refuses it.")
     else:
         lo, hi = ref["chars"]["p25"], ref["chars"]["p75"]
         out["char_rule"] = {"kind": "corpus-band", "p25": lo, "p75": hi}
