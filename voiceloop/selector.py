@@ -28,9 +28,12 @@ LONG_WORDS = 150
 # Kind eligibility per slot kind, strongest first. A post slot prefers real posts;
 # article excerpts pad only when the post pool is thin. Comments prefer comment/dm
 # rows, then short posts -- a 320-char comment should not be taught by 800-word prose.
+# "spoken" (2026-08-25): transcript utterances ride primary in the comment pool
+# (same conversational register) and fallback in the post pool -- founder-directed
+# "I write how I speak everywhere", but a 14-word burst never teaches post rhythm.
 ELIGIBLE_KINDS = {
-    "post": (("post",), ("article-excerpt",)),
-    "comment": (("comment", "dm"), ("post",)),
+    "post": (("post",), ("article-excerpt", "spoken")),
+    "comment": (("comment", "dm", "spoken"), ("post",)),
 }
 
 

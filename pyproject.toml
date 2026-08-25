@@ -1,10 +1,25 @@
 [project]
 name = "voice-loop"
-version = "0.1.0"
-description = "A voice system that learns from the drafts you rejected, not just the ones you published."
+version = "0.2.0"
+description = "Make AI write in your voice without fine-tuning: a local-first style fingerprint, deterministic output gates, and a corrections loop that learns from rejected drafts."
+keywords = ["ai-writing", "voice-cloning", "style-transfer", "claude", "chatgpt",
+            "prompt-engineering", "writing-style", "llm-tools", "personalization",
+            "no-fine-tuning", "writing-assistant", "authorship-verification"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Text Processing :: Linguistic",
+    "Topic :: Office/Business :: Writing",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
 requires-python = ">=3.9"
 dependencies = []
 license = {text = "MIT"}
+
+[project.urls]
+Homepage = "https://github.com/assafkip/voice-loop"
+Issues = "https://github.com/assafkip/voice-loop/issues"
 
 [project.scripts]
 voiceloop = "voiceloop.cli:main"

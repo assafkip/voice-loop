@@ -21,7 +21,16 @@ POV = "pov.md"
 LEXICON = "lexicon.json"
 FINGERPRINT = "fingerprint.json"
 
-EXEMPLAR_KINDS = ("post", "article-excerpt", "article", "comment", "dm", "email")
+EXEMPLAR_KINDS = ("post", "article-excerpt", "article", "comment", "dm", "email",
+                  "spoken")
+# "spoken" (2026-08-25): verbatim founder utterances from call transcripts.
+# Founder-directed: "I write how I speak everywhere", so his spoken register is
+# corpus material for every channel, not a calls-only silo. Instances merge these
+# rows from their own transcript-mining output; see also the spoken-register
+# section of each instance's voice identity doc.
+# Deliberately NOT in the post pool's primary tier: a 14-word burst must never
+# teach post rhythm (the form-match rule), so it rides primary in the comment pool
+# and fallback in the post pool. See selector.ELIGIBLE_KINDS.
 # "article" (2026-08-18 decontamination): a WHOLE article, added when full articles
 # replaced their excerpts in the corpus. Deliberately absent from
 # selector.ELIGIBLE_KINDS -- a 1,400-word article is reference material for the
