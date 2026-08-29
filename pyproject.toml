@@ -24,6 +24,14 @@ Issues = "https://github.com/assafkip/voice-loop/issues"
 [project.scripts]
 voiceloop = "voiceloop.cli:main"
 
+# EXPLICIT, because this repo is a flat layout with three top-level directories
+# (voiceloop/, corpus/, authorship/). Setuptools auto-discovery refuses to guess
+# between them and aborts the build, which made `pip install -e .` -- the second
+# line of the README's own quickstart -- fail on every clean clone. Only the
+# package ships; corpus/ is your data and authorship/ is an optional extra.
+[tool.setuptools]
+packages = ["voiceloop"]
+
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
