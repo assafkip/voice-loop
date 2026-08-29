@@ -22,8 +22,10 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
+import sys
 
-from . import corpus, fingerprint, validate
+from . import corpus, echo, fingerprint, slop_shapes, validate
 
 
 def _now():
@@ -73,6 +75,81 @@ def _fingerprint(args):
     return 0
 
 
+
+def _score(args):
+    """Score ARBITRARY text against the corpus. The command that makes this
+    usable from outside the repo that owns the corpus.
+
+    why this exists (2026-08-29): every other subcommand acts on the corpus.
+    There was no way to ask the one question a writer actually has, which is
+    "does THIS draft read like me", without importing the package and wiring the
+    calls by hand. So the engine was reachable only by people willing to write
+    Python, and a draft written anywhere else went unchecked.
+
+    Report, never a rewrite. It says which measured bands the draft falls outside
+    and which deterministic gates it trips. It cannot say the draft is GOOD; a
+    clean result means nothing is detectably wrong, which is a different claim and
+    the README is explicit about the difference.
+    """
+    text = sys.stdin.read() if args.file == "-" else open(args.file, encoding="utf-8").read()
+    if not text.strip():
+        print("nothing to score: empty input", file=sys.stderr)
+        return 2
+
+    voice = corpus.load(args.corpus_dir)
+    problems = []
+    notes = []
+
+    # 1. Style distance, only if a fingerprint exists. No fingerprint is a REASON,
+    #    not a silent pass: without measured bands there is nothing to be far from.
+    if voice.fingerprint is None:
+        problems.append(("fingerprint", "no fingerprint.json; run `voiceloop fingerprint` "
+                                        "to compute bands before scoring distance"))
+    else:
+        for metric in fingerprint.out_of_band(text, voice.fingerprint, tier="blocking"):
+            detail = fingerprint.score(text, voice.fingerprint).get(metric, {})
+            problems.append(("band", f"{metric}: {detail.get('value')} outside "
+                                     f"{detail.get('band')}"))
+
+    # 2. Templated shapes. Deterministic, corpus-independent.
+    for hit in slop_shapes.check(text):
+        problems.append(("shape", hit if isinstance(hit, str) else str(hit)))
+
+    # 3. Verbatim reuse of the author's own exemplars. The text most likely to be
+    #    echoed is the text the model was shown, which is why this is checked.
+    exemplar_texts = [r.get("text") or "" for r in voice.active_exemplars()]
+    if exemplar_texts:
+        for hit in echo.prompt_echo(text, exemplar_texts) or []:
+            problems.append(("echo", f"reuses corpus phrasing: {hit!r}"))
+
+    # 4. Banned vocabulary, and an HONEST REPORT when there is none.
+    #
+    # This looks for a `negative` list, which is the schema corpus/lexicon.json
+    # ships. A real corpus may key its lexicon differently, and when it does this
+    # branch finds nothing and says so rather than staying quiet. Measured
+    # 2026-08-29: a lexicon with keys `prefer`/`voiceprint_terms`/`contraction_pairs`
+    # produced ZERO findings on "excited to announce a revolutionary, best in class
+    # solution that will supercharge your workflow" -- text nobody would call
+    # on-voice. A vocabulary check that silently checks nothing is worse than no
+    # check, because the clean result reads as a pass.
+    banned = (voice.lexicon or {}).get("negative") or []
+    for word in banned:
+        if re.search(rf"\b{re.escape(str(word))}\b", text, re.I):
+            problems.append(("lexicon", f"banned term: {word!r}"))
+    if not banned:
+        notes.append("no `negative` list in lexicon.json, so VOCABULARY WAS NOT "
+                     "CHECKED. Bands, shapes and echo were.")
+
+    for kind, detail in problems:
+        print(f"{kind}: {detail}")
+    for note in notes:
+        print(f"NOT CHECKED: {note}")
+    print(f"{len(problems)} finding(s) against {len(exemplar_texts)} exemplar(s)")
+    # A clean result means nothing DETECTABLE is wrong. Every check here is a NO
+    # check; none of them can say the draft is good. The README says this too.
+    return 1 if problems else 0
+
+
 def _validate(args):
     # check_all returns a list of STRINGS and takes the corpus DIRECTORY. Both
     # halves of that were wrong here once; the shapes are asserted in test_cli.py.
@@ -92,6 +169,10 @@ def main(argv=None):
     sub.add_parser("fingerprint", parents=[common],
                    help="recompute the measured bands from your exemplars")
     sub.add_parser("validate", parents=[common], help="check the corpus for problems")
+    p_score = sub.add_parser("score", parents=[common],
+                             help="score any text against your corpus")
+    p_score.add_argument("file", nargs="?", default="-",
+                         help="file to score, or - for stdin (default)")
 
     p_corr = sub.add_parser("corrections", help="the loop").add_subparsers(
         dest="subcmd", required=True)
@@ -110,6 +191,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.cmd == "fingerprint":
         return _fingerprint(args)
+    if args.cmd == "score":
+        return _score(args)
     if args.cmd == "validate":
         return _validate(args)
     if args.cmd == "corrections":
