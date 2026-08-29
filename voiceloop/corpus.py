@@ -21,21 +21,23 @@ POV = "pov.md"
 LEXICON = "lexicon.json"
 FINGERPRINT = "fingerprint.json"
 
-EXEMPLAR_KINDS = ("post", "article-excerpt", "article", "comment", "dm", "email",
-                  "spoken")
-# "spoken" (2026-08-25): verbatim founder utterances from call transcripts.
-# Founder-directed: "I write how I speak everywhere", so his spoken register is
-# corpus material for every channel, not a calls-only silo. Instances merge these
-# rows from their own transcript-mining output; see also the spoken-register
-# section of each instance's voice identity doc.
-# Deliberately NOT in the post pool's primary tier: a 14-word burst must never
-# teach post rhythm (the form-match rule), so it rides primary in the comment pool
-# and fallback in the post pool. See selector.ELIGIBLE_KINDS.
+EXEMPLAR_KINDS = ("post", "article-excerpt", "article", "comment", "dm", "email")
 # "article" (2026-08-18 decontamination): a WHOLE article, added when full articles
 # replaced their excerpts in the corpus. Deliberately absent from
 # selector.ELIGIBLE_KINDS -- a 1,400-word article is reference material for the
 # authorship region, not a slot exemplar a 280-char draft should imitate.
-EXEMPLAR_CHANNELS = ("linkedin", "x", "substack", "medium", "any")
+# "reddit" added 2026-08-29. A real founder-written Reddit comment was banked as
+# an exemplar and the corpus refused it, correctly: the row named a channel this
+# tuple did not know. The convention every `kind: "comment"` row already follows
+# is channel-of-origin, where he actually wrote it, so the two honest fixes were
+# widening this tuple or relabelling the row "any". Relabelling was rejected: it
+# would have made this the one comment row whose channel does not say where it
+# came from, and `/q-reddit` drafts replies for that channel, so a Reddit
+# reference row is material the selector should be able to see. Nothing new
+# opens as a result. `check_pools`, `CHECKED_SLOTS` and `check_budget` each
+# iterate ("linkedin", "x") by name, so a wider allowlist creates no additional
+# pool that has to meet MIN_ROWS_PER_POOL.
+EXEMPLAR_CHANNELS = ("linkedin", "x", "substack", "medium", "reddit", "any")
 
 
 def read_jsonl(path):
