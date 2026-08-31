@@ -435,6 +435,33 @@ class TestAssemble:
             assert body.strip() in text
 
 
+    def test_external_source_correction_renders_under_its_own_header(self, tmp_path):
+        cor = [{"id": "his", "status": "active",
+                "instruction": "Never open with a number."},
+               {"id": "ext", "status": "active",
+                "source": assemble.EXTERNAL_SOURCE,
+                "instruction": "End on a colon line."}]
+        v = corpus.load(_voice_dir(tmp_path, corrections=cor))
+        text, prov = assemble.voice_section(v, "linkedin", counter=0)
+        standing = text.find("STANDING CORRECTIONS")
+        researched = text.find("RESEARCHED SHAPES")
+        assert -1 not in (standing, researched) and standing < researched
+        assert "End on a colon line" not in text[standing:researched], (
+            "an external correction must never sit under the override header")
+        assert prov["external_correction_ids"] == ["ext"]
+        assert prov["correction_ids"] == ["his", "ext"]
+
+    def test_unmarked_corrections_render_exactly_as_before(self, tmp_path):
+        """The fleet contract: a corpus that never sets source gets the legacy
+        single-block rendering byte for byte."""
+        cor = [{"id": "c1", "status": "active",
+                "instruction": "Never open with a number."}]
+        v = corpus.load(_voice_dir(tmp_path, corrections=cor))
+        text, prov = assemble.voice_section(v, "linkedin", counter=0)
+        assert "STANDING CORRECTIONS" in text
+        assert "RESEARCHED SHAPES" not in text
+        assert prov["external_correction_ids"] == []
+
 # --- validate ---------------------------------------------------------------------
 
 class TestValidate:
