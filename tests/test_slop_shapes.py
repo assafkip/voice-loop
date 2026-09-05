@@ -32,6 +32,28 @@ def _corpus():
         return [json.loads(line) for line in handle if line.strip()]
 
 
+#: HIS REAL PUBLISHED USES OF A BLOCKED SHAPE, founder-directed 2026-09-04.
+#: He was given the fork this test names and chose to keep the gate and record
+#: the exceptions: the gate exists to stop the MODEL staging a reveal, and he
+#: writes what he likes.
+#:
+#: MEASURED before allowlisting, across all 1,151 of his authored LinkedIn
+#: posts (the 2026-09-04 apify history pull), not against the corpus sample:
+#: he uses `slop-dramatic-pause` in 6 of them, 0.5%. Every instance is `why?`
+#: (3) or `the result?` (3). He has never written `the catch?`, `the kicker?`
+#: or `the problem?` in thirteen years. Usage is RISING -- one in 2024, three
+#: in 2025, two in 2026 -- so if this list keeps growing, the gate is arguing
+#: with him and not with a machine, and that is the moment to reconsider it.
+#:
+#: Each entry is (row id, rule). The list is EXHAUSTIVE and a new hit still
+#: fails, which is the property that makes this an allowlist and not an
+#: exemption. Never add a row here to make a red test green: the whole point
+#: of the failure is that it is loud.
+HIS_MEASURED_USES = {
+    ("li-2025-10-14-trust-safety-will-always-be-a", "slop-dramatic-pause"),
+    ("li-2025-09-07-reading-this-made-me-sick-because", "slop-dramatic-pause"),
+}
+
 class TestTheResearchExamplesAllFire:
     """The four verbatim examples from social-writing-method.md section 14g. If a
     pattern stops matching the sentence it was written for, the gate is decoration."""
@@ -63,7 +85,8 @@ class TestHisOwnCorpusStaysClean:
     def test_no_false_positive_anywhere_in_the_corpus(self):
         hits = [(row.get("id"), v["rule"])
                 for row in _corpus()
-                for v in slop_shapes.check(row.get("text") or "")]
+                for v in slop_shapes.check(row.get("text") or "")
+                if (row.get("id"), v["rule"]) not in HIS_MEASURED_USES]
         assert hits == [], (
             f"slop_shapes now blocks writing the founder actually published: {hits}. "
             f"Either the pattern widened past its evidence or he has started using "
@@ -108,7 +131,7 @@ class TestTheWideningIsSafeOnHisOwnCorpus:
         import json, os
         path = form.corpus_path()
         rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
-        return [r["text"] for r in rows
+        return [(r.get("id"), r["text"]) for r in rows
                 if r.get("text") and r.get("generated") is not True
                 and r.get("eligible_for_voice_reference") is not False
                 and r.get("status") != "retired"]
@@ -121,7 +144,15 @@ class TestTheWideningIsSafeOnHisOwnCorpus:
             pytest.skip("no corpus here; this package ships with an empty one and the "
                         "sweep is only meaningful against a real author's writing")
         assert len(corpus) >= 100, "corpus shrank; re-check the bar before trusting this"
-        caught = {t[:60]: slop_shapes.check(t) for t in corpus if slop_shapes.check(t)}
+        # Same allowlist as TestHisOwnCorpusStaysClean, read from the one constant
+        # rather than restated. Two copies of "which of his posts are known" is how
+        # an allowlist quietly becomes an exemption in one of the two places.
+        caught = {}
+        for rid, t in corpus:
+            fired = [v for v in slop_shapes.check(t)
+                     if (rid, v["rule"]) not in HIS_MEASURED_USES]
+            if fired:
+                caught[t[:60]] = fired
         assert caught == {}, f"a slop shape fires on his own writing: {list(caught)}"
 
     def test_the_two_new_shapes_are_actually_present(self):
