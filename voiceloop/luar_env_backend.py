@@ -22,7 +22,7 @@ One subprocess, one JSON exchange, one declared requirements file:
 
     parent (repo interpreter, no torch)
       -> uv run --python 3.12 --with-requirements requirements-authorship.txt
-           python3 luar_env_backend.py --worker
+           python3 -m voiceloop.luar_env_backend --worker
       -> child (declared env, has torch) imports luar_scorer.TransformersBackend
 
 THE CHILD RUNS THE SAME `TransformersBackend` THIS REPO ALREADY HAD. That is the
@@ -58,6 +58,10 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REQUIREMENTS = os.path.join(HERE, "requirements-authorship.txt")
 
+#: What the child is told to run. Derived from THIS module's own dotted name, so a
+#: move takes it along; see the comment at the `-m` in `encode_via_declared_env`.
+WORKER_MODULE = __name__ if "." in __name__ else f"voiceloop.{__name__}"
+
 # THE INTERPRETER PIN. It cannot live in requirements-authorship.txt (a
 # requirements file has no way to say it), and it is not cosmetic: the repo
 # interpreter is 3.14 and torch has no 3.14 wheels, so an unpinned `uv run` would
@@ -79,13 +83,13 @@ def _uv_available():
 
 
 def _child_env(package_parent):
-    """The child's environment: PYTHONPATH so it can find `pipeline`, and no
+    """The child's environment: PYTHONPATH so it can find the package, and no
     pytest marker.
 
     PYTHONPATH is REQUIRED, not belt-and-braces. `uv run python3 <abs path>` puts
     the SCRIPT's own directory on sys.path[0] -- here that is `pipeline/` itself,
-    not its parent -- so `from pipeline.luar_scorer import ...` raised
-    `ModuleNotFoundError: No module named 'pipeline'` on the first working run,
+    not its parent -- so the sibling `luar_scorer` import raised
+    `ModuleNotFoundError` on the first working run,
     with cwd already correct. cwd is not a sys.path entry for a script invocation,
     and assuming it was cost one round of this loop.
 
@@ -120,25 +124,34 @@ def encode_via_declared_env(documents):
     if not os.path.isfile(REQUIREMENTS):
         raise ScorerUnavailable(f"missing requirements file: {REQUIREMENTS}")
 
-    # `-m pipeline.luar_env_backend`, NOT a path to this file. Handing python3 a
-    # script path puts that script's OWN directory on sys.path[0] -- here
-    # `pipeline/` -- so every module sitting next to this one shadows a top-level
-    # package of the same name for the whole child process. That is not
-    # hypothetical: it is what produced round 3's
-    # `attempted relative import with no known parent package` from inside the
-    # transformers import, a message that names nothing in this repo.
-    # `-m` gives the worker a real package context and leaves `pipeline/` off
-    # sys.path entirely, which retires the shadowing class rather than dodging
-    # one instance of it.
+    # `-m <this module>`, NOT a path to this file. Handing python3 a script path
+    # puts that script's OWN directory on sys.path[0] -- the package dir -- so
+    # every module sitting next to this one shadows a top-level package of the
+    # same name for the whole child process. That is not hypothetical: it is what
+    # produced round 3's `attempted relative import with no known parent package`
+    # from inside the transformers import, a message that names nothing in this
+    # repo. `-m` gives the worker a real package context and leaves the package
+    # dir off sys.path entirely, which retires the shadowing class rather than
+    # dodging one instance of it.
+    #
+    # THE NAME IS DERIVED, never typed (2026-09-06). It was the literal
+    # "pipeline.luar_env_backend" and the module moved to `voiceloop` in extraction
+    # slice 12e. Nothing caught it: every test here mocks `subprocess.run`, so the
+    # string was never resolved by an interpreter. It failed only in the child, as
+    # `ModuleNotFoundError: No module named 'pipeline'`, which `encode_via_declared_env`
+    # correctly turns into ScorerUnavailable and `_advisory_authorship` correctly
+    # turns into a null score -- so the authorship number the founder asked to
+    # always be computed was silently absent on every run, at exit 0, with the
+    # reason sitting in a sidecar nobody reads. `__name__` cannot go stale.
     out_fd, out_path = tempfile.mkstemp(prefix="luar-vectors-", suffix=".json")
     os.close(out_fd)
     cmd = ["uv", "run", "--python", PYTHON_PIN,
            "--with-requirements", REQUIREMENTS,
-           "python3", "-m", "pipeline.luar_env_backend", "--worker",
+           "python3", "-m", WORKER_MODULE, "--worker",
            "--out", out_path]
-    # cwd is the PARENT of the package dir so the worker's `from voiceloop import
-    # luar_scorer` resolves the same package this process is running, not a copy
-    # that happens to be on the child's sys.path.
+    # cwd is the PARENT of the package dir so the worker's sibling import resolves
+    # the same package this process is running, not a copy that happens to be on
+    # the child's sys.path.
     cwd = os.path.dirname(HERE)
     try:
         proc = subprocess.run(
@@ -227,7 +240,13 @@ def _worker_main(argv):
     if not out_path:
         return 2
     try:
-        from pipeline.luar_scorer import TransformersBackend
+        # RELATIVE, like every other import of a sibling in this file. This was
+        # `from pipeline.luar_scorer import ...` and it is the SECOND stale spelling
+        # slice 12e left behind; fixing the `-m` name is what exposed it, because
+        # until then the child died before reaching this line. The worker runs as
+        # `-m voiceloop.luar_env_backend`, so it has a real package context and a
+        # relative import cannot go stale on the next move.
+        from .luar_scorer import TransformersBackend
         request = json.load(sys.stdin)
         vectors = TransformersBackend().encode(request["documents"])
         payload, code = {"vectors": vectors}, 0
