@@ -49,32 +49,19 @@ import statistics as st
 # env var wins so a caller outside this checkout can point at its own corpus without
 # editing the package, and the local default keeps every existing call site working
 # with no argument.
-CORPUS_ENV = "VOICE_LOOP_CORPUS"
-
-#: Directory names the corpus lives under, in probe order. Two entries because this
-#: module ships in two packages that named the directory differently, and hardcoding
-#: either one makes the module work in exactly one of them. The env var overrides both.
-_CORPUS_DIRS = ("voice", "corpus")
-
-_PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def corpus_path():
-    """Where the exemplars live, env first, then the first directory that exists.
-
-    Resolved per call, never at import: a module-level constant freezes the value a
-    test just set, and the corpus dir is exactly the thing a test wants to redirect.
-    Returns the first candidate when none exist, so the caller gets a real path in
-    the error rather than None.
-    """
-    root = os.environ.get(CORPUS_ENV)
-    if root:
-        return os.path.join(root, "exemplars.jsonl")
-    for name in _CORPUS_DIRS:
-        candidate = os.path.join(_PACKAGE_PARENT, name, "exemplars.jsonl")
-        if os.path.exists(candidate):
-            return candidate
-    return os.path.join(_PACKAGE_PARENT, _CORPUS_DIRS[0], "exemplars.jsonl")
+# NO CORPUS RESOLUTION LIVES HERE, deliberately (2026-09-05, extraction slice 4b).
+#
+# This module used to resolve the exemplar corpus from __file__: two candidate
+# directory names, an env override, and a parent computed from the module's own
+# location. Inside one deployment that is correct and invisible. Moving the file
+# would silently have repointed it at `plugins/voiceloop/voice/exemplars.jsonl`,
+# which does not exist, so the "pure move" the plan expected here was a behaviour
+# change wearing a move's clothes.
+#
+# Every corpus reader below therefore takes its path as a REQUIRED argument. A
+# caller that forgets gets a TypeError at the call site, never a silent read of an
+# empty or foreign corpus. The deployment half keeps the env var, the candidate
+# directory names and `corpus_path()`, and binds them.
 
 #: X's timeline fold. A post longer than this is collapsed behind "Show more", so a
 #: reader who sees the rest CHOSE to expand it, which is the dwell signal the platform
@@ -107,9 +94,8 @@ def _usable(row):
     return bool((row.get("text") or "").strip())
 
 
-def corpus_posts(channel, path=None):
+def corpus_posts(channel, path):
     """His real posts on one channel. kind == "post", never excerpts or comments."""
-    path = path or corpus_path()
     if not os.path.exists(path):
         return []
     out = []
@@ -154,7 +140,7 @@ def measure(text):
     }
 
 
-def bands(channel, path=None):
+def bands(channel, path):
     """His p25/median/p75 for one channel, or None when the corpus is too small.
 
     Refuses under 8 posts rather than emitting a quartile from a handful of rows. A
@@ -175,7 +161,7 @@ def bands(channel, path=None):
             "sentences_per_paragraph": q(sents)}
 
 
-def report(text, channel, path=None):
+def report(text, channel, path):
     """Draft vs his own practice. ADVISORY, like the corpus score, and for the same
     reason: this is evidence about shape, never a verdict on it.
 
@@ -219,7 +205,7 @@ def report(text, channel, path=None):
     return out
 
 
-def summary_line(text, channel, path=None):
+def summary_line(text, channel, path):
     """One line for a human. Empty string when the draft sits inside his practice."""
     rep = report(text, channel, path=path)
     if not rep["flags"]:
@@ -228,7 +214,7 @@ def summary_line(text, channel, path=None):
     return "form: " + "; ".join(rep["flags"])
 
 
-def writer_guidance(channel, path=None):
+def writer_guidance(channel, path):
     """The shape numbers as ONE sentence for the writer's prompt, or None.
 
     `report`/`summary_line` face a finished draft. This faces the model BEFORE it

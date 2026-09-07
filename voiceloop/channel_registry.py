@@ -158,9 +158,15 @@ def load(registry_path):
     if not isinstance(data, dict):
         raise ChannelRegistryError(
             f"voice-channels registry at {registry_path} must be an object")
-    vocab = data.get("channel_vocabulary")
-    if vocab is None:
+    # PRESENCE, not falsiness. `.get()` returns None for an ABSENT key and for an
+    # explicit `"channel_vocabulary": null` alike, so the null quietly loaded the
+    # built-in default instead of failing closed. That is the same hole the Stop
+    # gate had one layer up, and the same answer: a registry declaring the field
+    # and getting it wrong is malformed, while a registry that simply does not
+    # declare it is a registry with no vocabulary opinion.
+    if "channel_vocabulary" not in data:
         return DEFAULT
+    vocab = data["channel_vocabulary"]
     if not isinstance(vocab, dict):
         raise ChannelRegistryError(
             f"voice-channels registry at {registry_path}: channel_vocabulary must "
@@ -206,3 +212,49 @@ def load(registry_path):
 def for_instance(instance_root):
     """`resolve` then `load`. The one call an instance seam needs."""
     return load(resolve(instance_root))
+
+
+# How far up to look before giving up. Deep enough for the real fleet shape, an
+# instance corpus dir sitting four levels under its root, and shallow enough that
+# a runaway walk cannot reach a stranger's home directory.
+_MAX_WALK = 12
+
+
+def instance_root_for(start):
+    """The directory at or above `start` that OWNS a channel registry, or None.
+
+    Anchored on the registry's OWN two locations rather than on .git or any other
+    landmark, because that is literally the question being asked: which directory
+    above this one holds voice-channels.json or the pointer beside it. Answering
+    it with a different landmark is how a seam ends up reading a tree that has no
+    registry -- the public mirror and the skeleton disagree about where .git and
+    tests/ live, and a walk keyed on those finds a different answer in each
+    (the same trap test_validate_holds_no_channel_literal's VALIDATE_PY note
+    records for module paths).
+
+    None is a real answer and the common one: 26 instances own no registry and
+    every caller must treat None as "use the built-in default", which is
+    byte-identical to the behavior before this module existed.
+    """
+    current = os.path.abspath(start)
+    for _ in range(_MAX_WALK):
+        for rel in (REGISTRY_REL, POINTER_REL):
+            if os.path.isfile(os.path.join(current, rel)):
+                return current
+        parent = os.path.dirname(current)
+        if parent == current:               # filesystem root
+            break
+        current = parent
+    return None
+
+
+def for_path(start):
+    """The Channels governing `start`, or the built-in default when nothing owns it.
+
+    The whole seam in one call, so a caller cannot wire half of it. A registry
+    that IS present and broken still raises: falling back to the default there
+    would grade a corpus against a vocabulary its instance rejected, which is the
+    wrong-vocabulary bug wearing a fix.
+    """
+    root = instance_root_for(start)
+    return for_instance(root) if root else DEFAULT
