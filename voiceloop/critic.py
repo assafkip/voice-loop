@@ -538,10 +538,10 @@ def run(text, channel, at=None, runner=None, reviser=None, regate=None,
 
     `capture(bodies, channel, at)` IS OPTIONAL AND THE ENGINE OWNS NO STORE (2026-09-07,
     cgs-1). The critic keeps `content_key.text_sha(text)` and throws the body away, so
-    none of its 931 judgements could ever be checked against the founder: a draft that
-    fails is discarded and never reaches the postbook. `bodies` is every body this run wrote a
-    VERDICT ROW about, keyed by that same sha, handed to the caller once, after the log
-    is written. That is wider than "judged": it includes a revision the deterministic
+    none of its verdicts could ever be checked against a person's own read: a draft that
+    fails is discarded and never reaches the postbook. `bodies` is every body this run
+    wrote a VERDICT ROW about, keyed by that same sha, handed to the caller once, after
+    the log is written. That is wider than "judged": it includes a revision the deterministic
     gates rejected, which the critic never scored but which owns a STAGE_REGATE row and
     therefore has to be joinable. The store carries no stage, so a gold-set builder
     tells the two apart by joining back through the log.
@@ -581,9 +581,15 @@ def run(text, channel, at=None, runner=None, reviser=None, regate=None,
         Two other placements were measured and rejected. `_row` is a pure dict-builder
         that `test_critic.py` calls directly and whose regate callers pass gate-repaired
         text; making it write would make those tests write. `_cost_row` fires once per
-        candidate with whichever body is current, and the live log carries 66 cost rows
-        against 123 distinct `draft_sha`, so that placement stored at most half of them
-        and dropped the attempt-1 originals.
+        candidate with whichever body is current, so it stores at most one body per
+        candidate while a revising run judges two or three, and the ones it drops are
+        the attempt-1 originals.
+
+        THE RATIO IS THE POINT AND THE LOG IS THE RECORD. An operator's verdict log
+        carries far more distinct `draft_sha` than `cost` rows; count them there rather
+        than trusting a number written here, which rots (the first draft of this
+        comment was stale within the hour, partly from the run that verified it) and
+        which is that operator's usage data, not this package's.
         """
         if body:
             judged[content_key.text_sha(body)] = body
