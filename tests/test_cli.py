@@ -265,3 +265,76 @@ class TestCorrectionLifecycle(unittest.TestCase):
         self.assertEqual(0, cli.main(["corrections", "show", before[0]["id"],
                                       "--corpus-dir", self.tmp]))
         self.assertEqual(before, self._rows())
+
+
+class TestReviewRuns(unittest.TestCase):
+    """`voiceloop review`: the full non-generation path, run as a command.
+
+    WHY (2026-09-08). The package ships 35 modules and the command line reached
+    four. The gate roster, the channel length rules, the figure check and the form
+    read were reachable only by writing Python, so the published product was
+    smaller than the source and the gap was invisible from outside.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        _corpus(self.tmp)
+        cli.main(["fingerprint", "--corpus-dir", self.tmp])
+
+    def _run(self, argv):
+        import io as _io
+        import contextlib
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = cli.main(argv)
+        return code, buf.getvalue()
+
+    def test_review_runs_gates_that_score_does_not(self):
+        path = os.path.join(self.tmp, "d.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("Ship it by [DATE] once the review clears and the log is quiet.")
+        _, review_out = self._run(["review", path, "--corpus-dir", self.tmp])
+        _, score_out = self._run(["score", path, "--corpus-dir", self.tmp])
+        # placeholder_gate is in the review roster and in no part of score. If this
+        # ever passes for both, review has stopped adding anything.
+        assert "[DATE]" in review_out or "placeholder" in review_out, review_out
+        assert "[DATE]" not in score_out and "placeholder" not in score_out, score_out
+
+    def test_a_post_is_never_measured_against_the_reply_band(self):
+        """THE FIRST LIVE RUN'S DEFECT. The roster called reply_format on every
+        draft, so a 34-word POST came back "reply-too-short: below the 35-word floor
+        measured from his own approved comments" -- a floor for a comment on someone
+        else's thread, which says nothing about a post."""
+        path = os.path.join(self.tmp, "short.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("One capability marked blocked, no date on the label, and nothing "
+                     "wired to re-run the check. It is furniture now.")
+        _, as_post = self._run(["review", path, "--corpus-dir", self.tmp])
+        assert "reply-too-short" not in as_post, as_post
+        # The negative control: the same text under --kind reply DOES trip it, so
+        # this test cannot pass by the gate having been deleted.
+        _, as_reply = self._run(["review", path, "--corpus-dir", self.tmp,
+                                 "--kind", "reply", "--channel", "linkedin"])
+        assert "reply-too-short" in as_reply, as_reply
+
+    def test_a_channel_with_no_reply_band_is_reported_not_raised(self):
+        """reply_format.band RAISES on an unknown channel and gate_walk deliberately
+        does not catch, so this aborted the whole review instead of skipping a gate."""
+        path = os.path.join(self.tmp, "r.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("A short one about a check that cannot fail.")
+        code, out = self._run(["review", path, "--corpus-dir", self.tmp,
+                               "--kind", "reply", "--channel", "reddit"])
+        assert code in (0, 1), f"review aborted instead of reporting: {out}"
+        assert "REPLY LENGTH WAS NOT CHECKED" in out, out
+
+    def test_review_names_what_it_did_not_check(self):
+        """A clean deterministic result is not a verdict that the draft is good, and
+        the model-backed parts of this engine do not run here."""
+        path = os.path.join(self.tmp, "d.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("A check that cannot fail is decoration. Name the input that "
+                     "turns it red, or delete it and stop pretending you have coverage.")
+        _, out = self._run(["review", path, "--corpus-dir", self.tmp])
+        assert "NOT CHECKED: the semantic critic" in out, out
+        assert "FIGURES WERE NOT CHECKED" in out, out

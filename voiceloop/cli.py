@@ -40,7 +40,9 @@ import os
 import re
 import sys
 
-from . import corpus, echo, fingerprint, slop_shapes, validate
+from . import (assistant_gate, corpus, echo, ending_gate, figure_gate, fingerprint,
+               form, gate_walk, opener_gate, placeholder_gate, reply_format,
+               slop_shapes, source_shape, substance_gate, validate, x_format)
 
 
 def _now():
@@ -236,48 +238,10 @@ def _score(args):
         return 2
 
     voice = corpus.load(args.corpus_dir)
-    problems = []
-    notes = []
-
-    # 1. Style distance, only if a fingerprint exists. No fingerprint is a REASON,
-    #    not a silent pass: without measured bands there is nothing to be far from.
-    if voice.fingerprint is None:
-        problems.append(("fingerprint", "no fingerprint.json; run `voiceloop fingerprint` "
-                                        "to compute bands before scoring distance"))
-    else:
-        for metric in fingerprint.out_of_band(text, voice.fingerprint, tier="blocking"):
-            detail = fingerprint.score(text, voice.fingerprint).get(metric, {})
-            problems.append(("band", f"{metric}: {detail.get('value')} outside "
-                                     f"{detail.get('band')}"))
-
-    # 2. Templated shapes. Deterministic, corpus-independent.
-    for hit in slop_shapes.check(text):
-        problems.append(("shape", hit if isinstance(hit, str) else str(hit)))
-
-    # 3. Verbatim reuse of the author's own exemplars. The text most likely to be
-    #    echoed is the text the model was shown, which is why this is checked.
-    exemplar_texts = [r.get("text") or "" for r in voice.active_exemplars()]
-    if exemplar_texts:
-        for hit in echo.prompt_echo(text, exemplar_texts) or []:
-            problems.append(("echo", f"reuses corpus phrasing: {hit!r}"))
-
-    # 4. Banned vocabulary, and an HONEST REPORT when there is none.
-    #
-    # This looks for a `negative` list, which is the schema corpus/lexicon.json
-    # ships. A real corpus may key its lexicon differently, and when it does this
-    # branch finds nothing and says so rather than staying quiet. Measured
-    # 2026-08-29: a lexicon with keys `prefer`/`voiceprint_terms`/`contraction_pairs`
-    # produced ZERO findings on "excited to announce a revolutionary, best in class
-    # solution that will supercharge your workflow" -- text nobody would call
-    # on-voice. A vocabulary check that silently checks nothing is worse than no
-    # check, because the clean result reads as a pass.
-    banned = (voice.lexicon or {}).get("negative") or []
-    for word in banned:
-        if re.search(rf"\b{re.escape(str(word))}\b", text, re.I):
-            problems.append(("lexicon", f"banned term: {word!r}"))
-    if not banned:
-        notes.append("no `negative` list in lexicon.json, so VOCABULARY WAS NOT "
-                     "CHECKED. Bands, shapes and echo were.")
+    # The four checks live in `_corpus_findings`, shared with `review`, so the two
+    # commands cannot answer the same question two ways (2026-09-08). What each one
+    # checks and why is documented there.
+    problems, notes, exemplar_texts = _corpus_findings(text, voice)
 
     for kind, detail in problems:
         print(f"{kind}: {detail}")
@@ -286,6 +250,138 @@ def _score(args):
     print(f"{len(problems)} finding(s) against {len(exemplar_texts)} exemplar(s)")
     # A clean result means nothing DETECTABLE is wrong. Every check here is a NO
     # check; none of them can say the draft is good. The README says this too.
+    return 1 if problems else 0
+
+
+def _corpus_findings(text, voice):
+    """The four checks `score` runs, as (kind, detail) rows plus NOT-CHECKED notes.
+
+    Lifted out of `_score` when `review` arrived (2026-09-08) so the two commands
+    cannot drift into two standards for the same question. `review` is `score` plus
+    the gate roster and the channel rules; it is not a second opinion about bands.
+    """
+    problems, notes = [], []
+    if voice.fingerprint is None:
+        problems.append(("fingerprint", "no fingerprint.json; run `voiceloop fingerprint` "
+                                        "to compute bands before scoring distance"))
+    else:
+        for metric in fingerprint.out_of_band(text, voice.fingerprint, tier="blocking"):
+            detail = fingerprint.score(text, voice.fingerprint).get(metric, {})
+            problems.append(("band", f"{metric}: {detail.get('value')} outside "
+                                     f"{detail.get('band')}"))
+    for hit in slop_shapes.check(text):
+        problems.append(("shape", hit if isinstance(hit, str) else str(hit)))
+    exemplar_texts = [r.get("text") or "" for r in voice.active_exemplars()]
+    if exemplar_texts:
+        for hit in echo.prompt_echo(text, exemplar_texts) or []:
+            problems.append(("echo", f"reuses corpus phrasing: {hit!r}"))
+    banned = (voice.lexicon or {}).get("negative") or []
+    for word in banned:
+        if re.search(rf"\b{re.escape(str(word))}\b", text, re.I):
+            problems.append(("lexicon", f"banned term: {word!r}"))
+    if not banned:
+        notes.append("no `negative` list in lexicon.json, so VOCABULARY WAS NOT "
+                     "CHECKED. Bands, shapes and echo were.")
+    return problems, notes, exemplar_texts
+
+
+def _review(args):
+    """THE FULL NON-GENERATION PATH. Everything the engine can say about a draft
+    without calling a model.
+
+    why this exists (2026-09-08). The package ships 35 modules and the command line
+    reached four of them. A reader who cloned the repo got `score` -- bands, shapes,
+    echo, vocabulary -- while the gate roster, the channel length rules, the figure
+    check and the form read were reachable only by writing Python. So the published
+    product was smaller than the source, and the difference was invisible from
+    outside.
+
+    THE ROSTER IS BUILT HERE, ON PURPOSE. `gate_walk.walk`'s own docstring says the
+    walk ships and the roster does not, because which gates apply is one practice's
+    decision. This command is an operator like any other: it picks the gates that are
+    IN the package and carry no operator's rules, and it calls the shipped walk rather
+    than growing a second `+` chain -- which is the exact drift that module exists to
+    stop.
+
+    IT SAYS WHAT IT DID NOT CHECK. The model critic, the bounded reviser and the
+    authorship scorer are all real parts of this engine and none of them run here: two
+    need a model binary the package refuses to default, and one downloads ~2GB. A
+    clean result from this command means nothing DETERMINISTIC is wrong, which is a
+    narrower claim than "good", and printing the gap is how a reader can tell.
+    """
+    text = sys.stdin.read() if args.file == "-" else open(args.file, encoding="utf-8").read()
+    if not text.strip():
+        print("nothing to review: empty input", file=sys.stderr)
+        return 2
+    source_text = ""
+    if args.source:
+        source_text = open(args.source, encoding="utf-8").read()
+
+    voice = corpus.load(args.corpus_dir)
+    channel = args.channel
+    problems, notes, exemplars = _corpus_findings(text, voice)
+
+    # Each gate is bound in a closure because they take different arguments; that is
+    # the contract `walk` documents. Order is this roster's, and assistant_gate is
+    # LAST for the reason gate_walk's docstring gives.
+    roster = [
+        lambda: opener_gate.check(text),
+        lambda: placeholder_gate.check(text),
+        lambda: substance_gate.check(text, channel),
+        lambda: ending_gate.check(text),
+        lambda: source_shape.check(text),
+        lambda: x_format.length_violations(text, channel),
+        lambda: assistant_gate.check(text),
+    ]
+    # THE REPLY BAND IS NOT A POST BAND, and running it on a post is how a gate gets
+    # switched off. Caught on the first live run of this command: the roster called
+    # `reply_format` unconditionally and a 34-word post came back "reply-too-short:
+    # below the 35-word floor measured from his own approved comments", which is a
+    # floor for a comment on someone else's thread and says nothing about a post.
+    # `--kind` is the caller's declaration, the same way `channel` is; there is no
+    # way to read it off the text.
+    #
+    # The channel guard is separate and also load-bearing: `reply_format.band`
+    # RAISES on a channel it has no band for, and `walk` deliberately does not catch,
+    # so `--channel reddit --kind reply` would abort the whole review rather than
+    # skip one gate.
+    if args.kind == "reply":
+        if channel in reply_format.CHANNELS:
+            roster.insert(-1, lambda: reply_format.length_violations(text, channel))
+        else:
+            notes.append(f"no reply band for channel {channel!r}, so REPLY LENGTH WAS "
+                         f"NOT CHECKED. The bands are measured per channel and this "
+                         f"package has one for: "
+                         f"{', '.join(reply_format.CHANNELS)}.")
+    if source_text.strip():
+        roster.insert(-1, lambda: figure_gate.unsupported(text, source_text))
+    else:
+        notes.append("no --source given, so FIGURES WERE NOT CHECKED against source "
+                     "material. A number the draft invents cannot be detected without "
+                     "the text it came from.")
+
+    for row in gate_walk.walk(roster):
+        rule = row.get("rule", "gate") if isinstance(row, dict) else "gate"
+        detail = row.get("detail", row) if isinstance(row, dict) else row
+        problems.append((rule, detail))
+
+    for kind, detail in problems:
+        print(f"{kind}: {detail}")
+
+    # ADVISORY, printed apart from the findings. `form.report` is evidence about
+    # shape and returns flags, never violations; folding it into the count above
+    # would turn "your post is shorter than your median" into a failure.
+    shape = form.report(text, channel, os.path.join(args.corpus_dir, corpus.EXEMPLARS))
+    for flag in shape.get("flags", []):
+        print(f"shape (advisory): {flag}")
+
+    for note in notes:
+        print(f"NOT CHECKED: {note}")
+    print("NOT CHECKED: the semantic critic, the bounded reviser and the authorship "
+          "scorer. Two need a model binary this package refuses to default; the third "
+          "downloads a local model. Nothing here calls one.")
+    print(f"{len(problems)} finding(s) on channel {channel} "
+          f"against {len(exemplars)} exemplar(s)")
     return 1 if problems else 0
 
 
@@ -312,6 +408,22 @@ def main(argv=None):
                              help="score any text against your corpus")
     p_score.add_argument("file", nargs="?", default="-",
                          help="file to score, or - for stdin (default)")
+
+    p_review = sub.add_parser(
+        "review", parents=[common],
+        help="the full non-generation path: score plus the gate roster and the "
+             "channel rules")
+    p_review.add_argument("file", nargs="?", default="-",
+                          help="file to review, or - for stdin (default)")
+    p_review.add_argument("--channel", default="x",
+                          help="channel the draft is for; decides the length and "
+                               "format rules (default: x)")
+    p_review.add_argument("--kind", default="post", choices=["post", "reply"],
+                          help="a reply to someone else's thread has its own length "
+                               "band, measured from approved comments (default: post)")
+    p_review.add_argument("--source",
+                          help="the material the draft was written from. Without it "
+                               "figures cannot be checked, and the report says so.")
 
     p_corr = sub.add_parser("corrections", help="the loop").add_subparsers(
         dest="subcmd", required=True)
@@ -359,6 +471,8 @@ def main(argv=None):
         return _fingerprint(args)
     if args.cmd == "score":
         return _score(args)
+    if args.cmd == "review":
+        return _review(args)
     if args.cmd == "validate":
         return _validate(args)
     if args.cmd == "corrections":

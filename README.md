@@ -13,6 +13,28 @@ pip install -e .
 voiceloop --help
 ```
 
+### The five commands
+
+```bash
+voiceloop fingerprint            # measure your bands from your own writing
+voiceloop validate               # is the corpus healthy
+voiceloop score < draft.txt      # the light read: bands, templated shapes, echo, vocabulary
+voiceloop review draft.txt --channel x --kind post --source article.txt
+voiceloop corrections list       # add / show / retire / supersede
+```
+
+**`review` is the whole deterministic engine, `score` is the light read.** Review
+runs everything score does and then the gate roster (opener, placeholder,
+substance, ending, source-shape, assistant), the channel length rules, the figure
+check when you give it `--source`, and an advisory shape read against your own
+posts. It prints what it did NOT check, which on this path is always the
+model-backed parts: the semantic critic, the bounded reviser and the authorship
+scorer. None of them run without a model binary you name.
+
+Neither command can tell you a draft is good. Both are lists of NO checks, so a
+clean result means nothing detectable is wrong. That is a narrower claim, and the
+difference is the point.
+
 ---
 
 ## Start here: what this actually is
