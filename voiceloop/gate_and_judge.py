@@ -35,6 +35,12 @@ The deployment's `cycle._gate_and_judge` binds the five and calls through, so
 """
 from __future__ import annotations
 
+# The only import in this module, and it is a PACKAGE one: the five
+# operator-specific dependencies stay injected (see the docstring). A sha
+# function carries no operator's rules, and the alternative was making the
+# caller pass the same one-line call as a sixth keyword argument.
+from . import content_key
+
 
 def gate_and_judge(post, *, channel, idea_text, voice_prov, arch_id, arch_entry,
                    runner, trail, at,
@@ -169,6 +175,13 @@ def gate_and_judge(post, *, channel, idea_text, voice_prov, arch_id, arch_entry,
     # data from here. A record about the prompt, never a gate on it.
     _append_voice_provenance(channel, at, dict(
         voice_prov or {},
+        # THE JOIN KEY (2026-09-08). Without it this lane's rows carry a style
+        # distance and an authorship score attributable to no draft, which is what
+        # made 1,085 accumulated rows unjoinable to any outcome. Computed on the
+        # text that actually won, with the same `content_key.text_sha` the critic
+        # writes, so the two artifacts meet on one key.
+        draft_sha=(content_key.text_sha(verdict.text)
+                   if isinstance(verdict.text, str) else None),
         # The fingerprint was computed eleven lines up and then thrown away here:
         # this lane's `advisory_drift` is hand-built from the STYLE review, which
         # has no authorship in it. Naming the fingerprint is what puts the score on
