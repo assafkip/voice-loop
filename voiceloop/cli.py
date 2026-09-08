@@ -155,16 +155,32 @@ def _corrections_supersede(args):
     new_id = args.new_id or f"{today}-{args.slug}"
     if any(r.get("id") == new_id for r in rows):
         raise SystemExit(f"a correction with id {new_id!r} already exists")
-    replacement = {
+    # INHERIT BY DEFAULT, OVERRIDE WHAT CHANGES. The first version built this row
+    # field by field from a list of names, which drops in silence anything not on
+    # the list. It dropped `source`, a field this package has no concept of and the
+    # deployment's `voice_provenance.check_corrections` REQUIRES on every row: both
+    # merged rows went red the moment they reached a real corpus ("no source. Every
+    # correction must say where it came from"). The next field anyone adds anywhere
+    # would have been dropped the same way, silently, so the default is inverted
+    # rather than the one name added.
+    replacement = dict(old)
+    # The lifecycle fields belong to the row being RETIRED. Carrying them forward
+    # would hand the replacement a retirement it never had.
+    for dead in ("retired_at", "retired_reason", "superseded_by"):
+        replacement.pop(dead, None)
+    replacement.update({
         "id": new_id,
         "date": args.at or today,
-        "quote": args.quote or old.get("quote") or "",
         "instruction": args.instruction,
-        "scope": args.scope if args.scope is not None else (old.get("scope") or []),
-        "class": args.klass or old.get("class") or "interpretive",
         "status": "active",
         "supersedes": old["id"],
-    }
+    })
+    if args.quote:
+        replacement["quote"] = args.quote
+    if args.scope is not None:
+        replacement["scope"] = args.scope
+    if args.klass:
+        replacement["class"] = args.klass
     old["status"] = "retired"
     old["retired_at"] = args.at or today
     old["retired_reason"] = f"superseded by {new_id}"

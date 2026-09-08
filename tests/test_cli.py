@@ -251,6 +251,42 @@ class TestCorrectionLifecycle(unittest.TestCase):
         # which channels the rule governs.
         self.assertEqual(["x"], rows[new_id]["scope"])
 
+    def test_supersede_carries_every_inherited_field_not_just_the_ones_i_remembered(self):
+        """THE DEFECT A DOWNSTREAM GATE CAUGHT, 2026-09-08. `supersede` inherited
+        quote, scope and class and dropped everything else. The deployment's
+        `voice_provenance.check_corrections` requires a `source` on every row and
+        went red on both merged rows the moment they reached a real corpus: "no
+        source. Every correction must say where it came from."
+
+        The bug is the shape of the fix, not the missing name. A replacement built
+        field by field from a list someone typed silently drops whatever was not on
+        that list, and the next field anyone adds is dropped again in silence. So
+        the replacement now starts from the row it replaces and OVERRIDES what
+        changes, which inverts the default from drop to keep.
+        """
+        rows = self._rows()
+        # A field this CLI has no concept of, alongside the real one that broke.
+        rows[0]["source"] = "founder"
+        rows[0]["a_field_this_cli_never_heard_of"] = "keep me"
+        path = os.path.join(self.tmp, "corrections.jsonl")
+        with open(path, "w", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+        self.assertEqual(0, cli.main([
+            "corrections", "supersede", rows[0]["id"], "--corpus-dir", self.tmp,
+            "--slug", "replacement", "--instruction", "The replacing rule."]))
+        new_row = {r["id"]: r for r in self._rows()}[self._active()[0]]
+        self.assertEqual("founder", new_row.get("source"))
+        self.assertEqual("keep me", new_row.get("a_field_this_cli_never_heard_of"))
+        # What MUST NOT be inherited: the lifecycle fields of the retired row, or
+        # the replacement arrives already dead.
+        self.assertEqual("active", new_row["status"])
+        self.assertNotIn("retired_reason", new_row)
+        self.assertNotIn("retired_at", new_row)
+        self.assertNotIn("superseded_by", new_row)
+        self.assertEqual(rows[0]["id"], new_row["supersedes"])
+
     def test_retiring_an_unknown_id_changes_nothing(self):
         before = self._rows()
         with self.assertRaises(SystemExit):
