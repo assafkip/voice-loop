@@ -2,8 +2,8 @@
 
 > Make AI write in your voice without fine-tuning a model. A local-first
 > Python toolkit: build a style fingerprint from writing you already have,
-> gate every AI draft with deterministic checks, and teach the system from
-> your edits through an append-only corrections log.
+> gate every AI draft with deterministic checks, and teach the system through
+> an append-only corrections log you write when you reject a draft.
 
 voice-loop is a free, open-source (MIT) alternative to fine-tuning an LLM on
 your own writing. It works alongside Claude, ChatGPT, Gemini, or any local
@@ -18,12 +18,15 @@ model and requires no GPU, no cloud account, and no vector database.
   every AI draft against how you statistically write
 - Learning loop: rejected drafts become corrections that apply to the next
   prompt immediately; no retraining
-- Privacy: no cloud component, no telemetry, corpus stays local
+- Privacy: the deterministic core (fingerprint, gates, corrections) is local
+  files and standard library only, with no telemetry. The optional critic,
+  revision and authorship parts call a model backend you name, so text you
+  send those goes wherever that model runs
 
 ## Main concepts
 
-- Corrections log: append-only record of every edit you make to an AI draft
-  and why, folded into the next prompt
+- Corrections log: append-only record of the corrections you log against an AI
+  draft and why, folded into the next prompt
 - Style fingerprint: sentence-length distribution, contraction rate, hedge
   count and paragraph rhythm computed as percentiles from your own corpus
 - Echo gate: refuses verbatim reuse of the examples inside the prompt

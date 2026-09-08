@@ -3,9 +3,9 @@
 **Make AI write in your voice, and refuse to publish when it did not.**
 
 A local-first Python toolkit that learns your writing style from work you already
-have, checks every draft against it, and learns from every edit you make. No GPU,
-no vector database, no cloud account, no fine-tuning. The core imports only the
-Python standard library.
+have, checks every draft against it, and carries every correction you log forward
+into the next draft. No GPU, no vector database, no cloud account, no fine-tuning.
+The core imports only the Python standard library.
 
 ```bash
 git clone https://github.com/assafkip/voice-loop && cd voice-loop
@@ -297,9 +297,18 @@ prompt, and it scores the draft that comes back. Model-agnostic by construction.
 **How much writing do I need?** The reference build ran on about 120 pieces. More
 is better; the fingerprint needs enough samples to compute a range.
 
-**Does my private writing leave my machine?** No. There is no cloud component and
-no telemetry. Your corpus stays in `corpus/` and ships empty for exactly that
+**Does my private writing leave my machine?** The deterministic core does not send
+it anywhere: `fingerprint`, `validate`, `score`, the gates and the corrections loop
+read and write local files only, import nothing outside the standard library, and
+emit no telemetry. Your corpus stays in `corpus/` and ships empty for exactly that
 reason.
+
+The optional model-backed parts are the exception, and they are opt-in by
+construction. `critic`, `revise` and generation route through
+`prompt_render.run_model`, which shells out to a CLI you name; the authorship
+scorer (`luar_env_backend`) loads a local model in a subprocess. Anything you pass
+to a hosted model goes wherever that model runs. `run_model` has no default
+binary, so nothing reaches a model until you point it at one.
 
 **Can I use it for a whole team's shared voice?** The mechanism does not care
 whose corpus it reads, but every quality claim here was measured against one

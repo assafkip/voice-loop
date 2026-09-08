@@ -5,9 +5,24 @@ this project. Every other voice tool learns from what you published. This learns
 from the delta between what the model wrote and what you rewrote, which is the
 only place your actual preferences are legible.
 
-Append-only on purpose. A correction is a dated fact about what you wanted at a
-moment, not a setting to be edited later. Superseding one means writing a newer
-row, so the trail of how a voice changed stays readable.
+A correction is a dated fact about what you wanted at a moment, so the trail of
+how a voice changed stays readable. `add` only ever appends, and no command here
+deletes a row or edits an instruction.
+
+RETIREMENT IS NOT DELETION, and it is mandatory rather than optional. Corrections
+accumulate into the prompt forever, and `validate.check_correction_share` refuses
+a corpus whose rules crowd past 70% of the thinnest assembly. Its own remedy note
+names the mechanism: "retiring a superseded rule is a one-field edit", because
+`corpus.active_corrections` renders only `status == "active"`. So `retire` and
+`supersede` flip that one field and record why, in place, keeping the row, its
+instruction, its quote and its date. `list` and `show` read.
+
+WHY THE READING PATH WAS NOT ENOUGH (measured 2026-09-08). The reference corpus
+sat at 72% on both channels, over the ceiling, with 22 active rows against 1
+retired. The status field, the validator and the ceiling all existed; the only
+way to change a status was to hand-edit JSONL, so nobody did, and the arm of the
+system that assembles the full prompt was a configuration the validator refused.
+A lifecycle with no operator surface is a lifecycle nobody runs.
 
 WHY THIS FILE HAS ITS OWN TEST (from a real defect). Every module this imports is
 generated from the engine; this file is not, so an engine signature can move and
@@ -31,6 +46,130 @@ from . import corpus, echo, fingerprint, slop_shapes, validate
 def _now():
     """Injected in one place so a test can pin it. Never read twice per run."""
     return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _corrections_path(args):
+    return os.path.join(args.corpus_dir, corpus.CORRECTIONS)
+
+
+def _read_corrections(path):
+    """EVERY row, retired ones included. `corpus.active_corrections` filters; a
+    lifecycle command has to see what it is about to change."""
+    rows = []
+    if not os.path.exists(path):
+        return rows
+    with open(path, encoding="utf-8") as handle:
+        for number, line in enumerate(handle, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise SystemExit(
+                    f"{path}:{number} is not valid JSON ({exc}); "
+                    f"nothing was changed") from exc
+    return rows
+
+
+def _write_corrections(path, rows):
+    """THE rewriter, and the only one. Atomic, for the same reason `fingerprint`
+    is: a half-written corrections file silently drops rules, and a dropped rule
+    is one the model never sees again.
+
+    `add` appends instead of coming through here on purpose, so a log that races
+    a rewrite loses nothing. That makes this the one place two writers could
+    collide, which is why it is one function and not a pattern repeated per
+    subcommand."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def _find_correction(rows, correction_id):
+    for row in rows:
+        if row.get("id") == correction_id:
+            return row
+    known = ", ".join(r.get("id", "?") for r in rows) or "none"
+    raise SystemExit(f"no correction with id {correction_id!r}; corpus holds: {known}")
+
+
+def _corrections_list(args):
+    rows = _read_corrections(_corrections_path(args))
+    if not rows:
+        print("no corrections logged yet")
+        return 0
+    shown = [r for r in rows
+             if args.status in (None, "all") or r.get("status", "active") == args.status]
+    for row in shown:
+        scope = ",".join(row.get("scope") or []) or "all"
+        instruction = (row.get("instruction") or "").replace("\n", " ")
+        if len(instruction) > 72:
+            instruction = instruction[:69] + "..."
+        print(f"{row.get('status', 'active'):9} {row.get('date', '?'):10} "
+              f"{row.get('id', '?'):32} [{scope}] {instruction}")
+    active = sum(1 for r in rows if r.get("status", "active") == "active")
+    print(f"\n{len(shown)} shown, {active} active of {len(rows)} total")
+    return 0
+
+
+def _corrections_show(args):
+    rows = _read_corrections(_corrections_path(args))
+    row = _find_correction(rows, args.id)
+    print(json.dumps(row, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def _corrections_retire(args):
+    """Off 'active', with the reason kept. The row and its instruction stay."""
+    path = _corrections_path(args)
+    rows = _read_corrections(path)
+    row = _find_correction(rows, args.id)
+    if row.get("status") == "retired":
+        print(f"{args.id} is already retired ({row.get('retired_reason', 'no reason recorded')})")
+        return 0
+    row["status"] = "retired"
+    row["retired_at"] = args.at or _dt.date.today().isoformat()
+    row["retired_reason"] = args.reason
+    _write_corrections(path, rows)
+    print(f"correction {args.id} retired; it no longer rides in the assembled prompt")
+    return 0
+
+
+def _corrections_supersede(args):
+    """One act, because two are how a corpus ends up carrying both rules.
+
+    The replacement is appended active and carries `supersedes`, the old row is
+    retired and carries `superseded_by`. Doing this as `add` then `retire` is the
+    same two writes with a window in between where the prompt holds both rules,
+    and that window is how the share ceiling was reached in the first place.
+    """
+    path = _corrections_path(args)
+    rows = _read_corrections(path)
+    old = _find_correction(rows, args.id)
+    today = _dt.date.today().isoformat()
+    new_id = args.new_id or f"{today}-{args.slug}"
+    if any(r.get("id") == new_id for r in rows):
+        raise SystemExit(f"a correction with id {new_id!r} already exists")
+    replacement = {
+        "id": new_id,
+        "date": args.at or today,
+        "quote": args.quote or old.get("quote") or "",
+        "instruction": args.instruction,
+        "scope": args.scope if args.scope is not None else (old.get("scope") or []),
+        "class": args.klass or old.get("class") or "interpretive",
+        "status": "active",
+        "supersedes": old["id"],
+    }
+    old["status"] = "retired"
+    old["retired_at"] = args.at or today
+    old["retired_reason"] = f"superseded by {new_id}"
+    old["superseded_by"] = new_id
+    _write_corrections(path, rows + [replacement])
+    print(f"correction {new_id} replaces {old['id']}; {old['id']} is retired")
+    return 0
 
 
 def _corrections_add(args):
@@ -188,6 +327,33 @@ def main(argv=None):
     p_add.add_argument("--id")
     p_add.add_argument("--at")
 
+    p_list = p_corr.add_parser("list", parents=[common],
+                               help="every correction and its status")
+    p_list.add_argument("--status", choices=["active", "promoted", "retired", "all"],
+                        help="filter; default shows all")
+    p_show = p_corr.add_parser("show", parents=[common],
+                               help="one correction, whole row")
+    p_show.add_argument("id")
+    p_retire = p_corr.add_parser(
+        "retire", parents=[common],
+        help="stop a correction riding in the prompt, keeping the row")
+    p_retire.add_argument("id")
+    p_retire.add_argument("--reason", required=True,
+                          help="why it no longer applies; kept on the row")
+    p_retire.add_argument("--at")
+    p_sup = p_corr.add_parser(
+        "supersede", parents=[common],
+        help="replace a correction with a newer one, in one act")
+    p_sup.add_argument("id", help="the correction being replaced")
+    p_sup.add_argument("--instruction", required=True)
+    p_sup.add_argument("--slug", required=True, help="kebab-case id suffix")
+    p_sup.add_argument("--quote", help="defaults to the replaced row's quote")
+    p_sup.add_argument("--scope", nargs="*", help="defaults to the replaced row's scope")
+    p_sup.add_argument("--class", dest="klass",
+                       choices=["deterministic", "interpretive"])
+    p_sup.add_argument("--new-id", dest="new_id")
+    p_sup.add_argument("--at")
+
     args = parser.parse_args(argv)
     if args.cmd == "fingerprint":
         return _fingerprint(args)
@@ -196,7 +362,15 @@ def main(argv=None):
     if args.cmd == "validate":
         return _validate(args)
     if args.cmd == "corrections":
-        return _corrections_add(args)
+        # Dispatch on SUBCMD. It used to run `add` for anything under
+        # `corrections`, which was invisible while `add` was the only one.
+        return {
+            "add": _corrections_add,
+            "list": _corrections_list,
+            "show": _corrections_show,
+            "retire": _corrections_retire,
+            "supersede": _corrections_supersede,
+        }[args.subcmd](args)
     return 2
 
 

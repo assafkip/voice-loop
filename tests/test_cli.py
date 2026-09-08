@@ -182,3 +182,86 @@ class ModuleEntryPoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCorrectionLifecycle(unittest.TestCase):
+    """retire / supersede / list / show, run as commands against a real corpus.
+
+    WHY (measured 2026-09-08). `validate.check_correction_share` refused the
+    reference corpus at 72% on both channels and its own message says the remedy
+    is retirement. Nothing on the command line could retire anything: the
+    `corrections` branch of main() called `_corrections_add` whatever subcommand
+    was typed. So the only way to clear the ceiling was hand-editing JSONL, and
+    the full-prompt configuration stayed one the validator would not pass.
+
+    Each test asserts on what the LOADER sees, not on the printed line, because
+    the thing that matters is whether the rule still reaches the prompt.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        _corpus(self.tmp)
+        self.assertEqual(0, cli.main([
+            "corrections", "add", "--corpus-dir", self.tmp,
+            "--slug", "no-questions", "--instruction", "Never open on a question.",
+            "--quote", "stop asking me things", "--scope", "x"]))
+
+    def _rows(self):
+        path = os.path.join(self.tmp, "corrections.jsonl")
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+
+    def _active(self):
+        from voiceloop import corpus as _c
+        return [r["id"] for r in _c.load(self.tmp).active_corrections()]
+
+    def test_a_new_correction_reaches_the_prompt(self):
+        # The negative control for every assertion below: if this is empty the
+        # retire tests would pass for the wrong reason.
+        self.assertEqual(1, len(self._active()))
+
+    def test_retire_takes_the_rule_out_of_the_prompt_and_keeps_the_row(self):
+        target = self._rows()[0]["id"]
+        self.assertEqual(0, cli.main([
+            "corrections", "retire", target, "--corpus-dir", self.tmp,
+            "--reason", "the shape rule replaced it"]))
+        self.assertEqual([], self._active())
+        row = self._rows()[0]
+        self.assertEqual("retired", row["status"])
+        self.assertEqual("the shape rule replaced it", row["retired_reason"])
+        # NOT deletion: the instruction and the quote survive the retirement.
+        self.assertEqual("Never open on a question.", row["instruction"])
+        self.assertEqual("stop asking me things", row["quote"])
+        self.assertEqual(1, len(self._rows()))
+
+    def test_supersede_leaves_exactly_one_rule_active_and_links_both_ways(self):
+        old_id = self._rows()[0]["id"]
+        self.assertEqual(0, cli.main([
+            "corrections", "supersede", old_id, "--corpus-dir", self.tmp,
+            "--slug", "open-on-the-claim",
+            "--instruction", "Open on the claim or the event."]))
+        active = self._active()
+        self.assertEqual(1, len(active), "both rules rode the prompt at once")
+        rows = {r["id"]: r for r in self._rows()}
+        new_id = active[0]
+        self.assertEqual(old_id, rows[new_id]["supersedes"])
+        self.assertEqual(new_id, rows[old_id]["superseded_by"])
+        self.assertEqual("retired", rows[old_id]["status"])
+        # scope and class are inherited, so a replacement cannot silently widen
+        # which channels the rule governs.
+        self.assertEqual(["x"], rows[new_id]["scope"])
+
+    def test_retiring_an_unknown_id_changes_nothing(self):
+        before = self._rows()
+        with self.assertRaises(SystemExit):
+            cli.main(["corrections", "retire", "does-not-exist",
+                      "--corpus-dir", self.tmp, "--reason", "x"])
+        self.assertEqual(before, self._rows())
+        self.assertEqual(1, len(self._active()))
+
+    def test_list_and_show_read_without_writing(self):
+        before = self._rows()
+        self.assertEqual(0, cli.main(["corrections", "list", "--corpus-dir", self.tmp]))
+        self.assertEqual(0, cli.main(["corrections", "show", before[0]["id"],
+                                      "--corpus-dir", self.tmp]))
+        self.assertEqual(before, self._rows())
