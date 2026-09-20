@@ -308,14 +308,24 @@ def check_fingerprint_fresh(voice):
     return problems
 
 
-def _targets_for(channel, base, targets):
+def _targets_for(channel, base, targets, extreme=min):
     """The lengths this channel's prompts are really assembled at.
 
     `targets` is a {channel: [words, ...]} DECLARATION supplied by the deployment,
     because the engine cannot know an instance's producer table. When a channel
-    declares nothing, the fallback is the pre-2026-09-19 enumeration -- None plus
-    the corpus's own shortest register -- so a fleet instance that declares
-    nothing is graded exactly as before.
+    declares nothing, the fallback is the corpus's own registers plus None.
+
+    AN UNDECLARED INSTANCE IS **NOT** GRADED AS BEFORE, and an earlier version of
+    this paragraph claimed it was (a review, reviewer; the claim was in the
+    PR body too). Measured: a corpus with a fat COMMENT slot and a thin post slot
+    reads 602 chars under the old shape (post only, target None, 12 counters) and
+    24122 under this one, against a 24000 ceiling. Clean before, RED after.
+
+    That is the CORRECT direction -- the old shape sampled one slot kind at one
+    target for twelve counters and called it "the largest legal assembly" -- but
+    it means a fleet instance can go red on a corpus its suite passed yesterday,
+    with no change to its own code. That belongs in a release note, not in a
+    docstring that says nothing changed.
 
     WHY A DECLARATION AND NOT A GUESS (2026-09-19). Until `target_words` became
     required, these two checks synthesized `None` and the corpus minimum and
@@ -325,14 +335,34 @@ def _targets_for(channel, base, targets):
     shape no caller can build is not strictness, it is a false red, and a check
     red on shapes its own system cannot produce is one someone switches off.
 
-    The declaration is not self-serving, because it is PINNED against the real
-    call sites: `test_voice_reach.py` parses them and fails if the declaration and
-    the code disagree. A number here that no caller uses is a failing test.
+    `extreme` IS THE WHOLE REASON THIS TAKES A PARAMETER (a review,
+    major). The two callers want OPPOSITE ENDS of the length distribution and
+    they shared one fallback, so one of them was always graded at the wrong end:
+
+      check_budget           a CEILING  -> the target drawing the LONGEST rows
+      check_correction_share a  FLOOR   -> the target collapsing the pool hardest
+
+    Measured on the live ASK corpus, linkedin/post, worst assembly by target:
+    None 20944, corpus-min 47 -> 15348, 200 -> 19438, corpus-max 479 -> 23915.
+    `check_budget` enumerated (None, corpus-min) and reported 20944 as the worst
+    while the reachable worst was 23915, eighty-five characters under a 24000
+    ceiling. A gate that grades the wrong end of the distribution is not strict
+    or lax, it is measuring something else.
+
+    THE DECLARATION IS PINNED INSTANCE-SIDE, NOT HERE, and this sentence says so
+    rather than implying a guard this package ships. The consuming repo's
+    `test_voice_reach.py::TestTheDeclarationIsCOMPLETE` parses its own call sites
+    and fails when a lane assembles at a length the declaration omits. That test
+    cannot live in this package: it resolves INSTANCE modules this engine has
+    never heard of. What travels with the engine is
+    `tests/test_engine_surface.py::test_a_declaration_that_omits_a_channel_is_not_graded`,
+    which pins the consequence -- an undeclared channel falls back rather than
+    going ungraded -- in terms the engine can state alone.
     """
     declared = (targets or {}).get(channel)
     if declared:
         return list(declared)
-    return (None, min(selector._words(r) for r in base))
+    return (None, extreme(selector._words(r) for r in base))
 
 
 def check_budget(voice, channels=None, targets=None):
@@ -358,7 +388,10 @@ def check_budget(voice, channels=None, targets=None):
                                           selector.DEFAULT_K)
             if not base:
                 continue
-            for target in _targets_for(channel, base, targets):
+            # max: this is a CEILING check, so the fallback must reach for the
+            # target that draws the LONGEST rows. It used to share the floor
+            # fallback and understated the worst by ~3000 chars.
+            for target in _targets_for(channel, base, targets, extreme=max):
                 pool = selector.resolved_pool(rows, channel, slot_kind,
                                               selector.DEFAULT_K, target)
                 for counter in range(len(pool) or 1):
@@ -449,10 +482,14 @@ def check_correction_share(voice, channels=None, targets=None):
                                           selector.DEFAULT_K)
             if not base:
                 continue
-            # target_words: the corpus's own shortest register, which is the target
-            # that collapses the pool hardest -- `length_band` ranks by distance, so
-            # no other target draws shorter rows. None is kept because pre-2026
-            # callers still pass it.
+            # target_words: supplied by `_targets_for`, which prefers the
+            # deployment's DECLARED lengths and falls back to the corpus's own
+            # shortest register plus None when a channel declares nothing. The
+            # shortest register is the target that collapses the pool hardest,
+            # since `length_band` ranks by distance. The line here used to say
+            # "None is kept because pre-2026 callers still pass it"; that stopped
+            # being the reason on 2026-09-19 when `target_words` became required,
+            # and `_targets_for`'s own docstring is the authority now.
             for target in _targets_for(channel, base, targets):
                 pool = selector.resolved_pool(rows, channel, slot_kind,
                                               selector.DEFAULT_K, target)
