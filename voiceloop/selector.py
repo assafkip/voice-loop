@@ -218,7 +218,32 @@ def select(rows, channel, counter, slot_index=0, k=DEFAULT_K, slot_kind="post",
         # alone cannot express "near"; distance can.
         span = max(target_words * ROTATION_SPAN_FRACTION, ROTATION_MIN_SPAN_WORDS)
         near = [r for r in ranked if abs(_words(r) - target_words) <= span]
-        window = near[:max(k * ROTATION_WINDOW_MULT, k + 1)]
+        # THE DISTANCE BOUND IS THE WINDOW, and the count cap that used to sit here
+        # was a second threshold doing the same job worse (an earlier fix, 2026-09-19).
+        #
+        # This line read `near[:max(k * ROTATION_WINDOW_MULT, k + 1)]`. That cut the
+        # band to 12 rows no matter how large it was, so reach did not grow with the
+        # corpus. Measured on the live ASK corpus the day 51 approved LinkedIn posts
+        # were banked: linkedin/post at the production target of 200 had 61 rows
+        # INSIDE the band and the rotation reached 13 of 106. Banking 51 posts moved
+        # reach from 13 to 13 -- the corpus doubled and what the model sees did not.
+        # 93 of 106 rows were unreachable; one row appeared in 24 of 24 counters.
+        #
+        # WHY REMOVING IT DOES NOT REOPEN THE 2026-08-09 SCAR. That scar is about a
+        # short slot being taught article rhythm, and `span` is what prevents it:
+        # every row in `near` is already within ROTATION_SPAN_FRACTION of the target.
+        # The count cap was added in the same 2026-09-10 edit that added `span`,
+        # against a count-ONLY version that had no distance bound at all -- the
+        # comment below records that history. Once distance arrived the count became
+        # redundant, and nobody removed it. `test_short_target_never_returns_the_long
+        # _row` is the guard that proves distance is doing the work; it stays green
+        # with this line gone, and `test_voice_reach.py` in the consuming repo pins
+        # both halves against each other.
+        #
+        # Raising ROTATION_WINDOW_MULT instead was rejected: that is moving a
+        # threshold to fit the data, which is the failure mode this file's own
+        # comments exist to document.
+        window = near
         # EXHAUSTION MUST NOT BECOME STARVATION, the rule `resolved_pool` states and
         # this branch inherits. A tight band on a thin corpus can hold fewer than k
         # rows; falling back to the nearest k is the pre-2026-09-10 behaviour, so a
