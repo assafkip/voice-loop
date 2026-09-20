@@ -18,25 +18,14 @@ Three properties, each load-bearing and each tested:
 from __future__ import annotations
 
 DEFAULT_K = 4
-
-# TOMBSTONE, and it uses plain `#` rather than `#:` ON PURPOSE. A `#:` block
-# attaches to the NEXT assignment, so writing this as `#:` made it read as
-# documenting ROTATION_SPAN_FRACTION below as DELETED (a review, nit).
-#
-# ROTATION_WINDOW_MULT = 3 was RETIRED 2026-09-19 and deleted rather than left at
-# a value nobody reads. It capped the rotation window at k*3 rows on top of the
-# distance bound below, which already expresses "near the target". Two bounds for
-# one job, and the count one did not grow with the corpus: reach stayed at 12
-# whether the pool held 13 rows or 1300. Measured on the live ASK corpus, 13 of
-# 106 reachable with 61 inside the band. `select` carries the full record.
-#
-# Its docstring also claimed "lowering it to 1 restores the defect this fixes",
-# which stopped being true the moment the constant stopped being read. A dead
-# constant is clutter; a dead constant that still asserts a behaviour is a trap,
-# which is why this is a deletion and not a rename.
-# `tests/test_length_axis.py::test_every_row_inside_the_band_is_reachable` goes
-# RED if the cap is reintroduced.
-
+#: How many multiples of k the length window holds before rotation picks from it.
+#: A JUDGMENT CALL, NOT A MEASUREMENT, and labelled that way on purpose rather than
+#: dressed in a false n. What IS checkable, and what picked 3: it is the smallest
+#: multiplier that gives every live slot more than one distinct exemplar set across
+#: 31 counters, while keeping the window to the nearest rows so the length scar
+#: (prd-content-engine-sameness-2026-08-09) stays closed. Raising it trades length
+#: discipline for variety; lowering it to 1 restores the defect this fixes.
+ROTATION_WINDOW_MULT = 3
 #: How far from the target a row may sit and still enter the rotation window, as a
 #: fraction of the target with a floor for very short targets. BOTH ARE JUDGMENT
 #: CALLS, not measurements, and are labelled so rather than given a false n. The
@@ -229,32 +218,7 @@ def select(rows, channel, counter, slot_index=0, k=DEFAULT_K, slot_kind="post",
         # alone cannot express "near"; distance can.
         span = max(target_words * ROTATION_SPAN_FRACTION, ROTATION_MIN_SPAN_WORDS)
         near = [r for r in ranked if abs(_words(r) - target_words) <= span]
-        # THE DISTANCE BOUND IS THE WINDOW, and the count cap that used to sit here
-        # was a second threshold doing the same job worse (an earlier fix, 2026-09-19).
-        #
-        # This line read `near[:max(k * ROTATION_WINDOW_MULT, k + 1)]`. That cut the
-        # band to 12 rows no matter how large it was, so reach did not grow with the
-        # corpus. Measured on the live ASK corpus the day 51 approved LinkedIn posts
-        # were banked: linkedin/post at the production target of 200 had 61 rows
-        # INSIDE the band and the rotation reached 13 of 106. Banking 51 posts moved
-        # reach from 13 to 13 -- the corpus doubled and what the model sees did not.
-        # 93 of 106 rows were unreachable; one row appeared in 24 of 24 counters.
-        #
-        # WHY REMOVING IT DOES NOT REOPEN THE 2026-08-09 SCAR. That scar is about a
-        # short slot being taught article rhythm, and `span` is what prevents it:
-        # every row in `near` is already within ROTATION_SPAN_FRACTION of the target.
-        # The count cap was added in the same 2026-09-10 edit that added `span`,
-        # against a count-ONLY version that had no distance bound at all -- the
-        # comment below records that history. Once distance arrived the count became
-        # redundant, and nobody removed it. `test_short_target_never_returns_the_long
-        # _row` is the guard that proves distance is doing the work; it stays green
-        # with this line gone, and `test_voice_reach.py` in the consuming repo pins
-        # both halves against each other.
-        #
-        # Raising ROTATION_WINDOW_MULT instead was rejected: that is moving a
-        # threshold to fit the data, which is the failure mode this file's own
-        # comments exist to document.
-        window = near
+        window = near[:max(k * ROTATION_WINDOW_MULT, k + 1)]
         # EXHAUSTION MUST NOT BECOME STARVATION, the rule `resolved_pool` states and
         # this branch inherits. A tight band on a thin corpus can hold fewer than k
         # rows; falling back to the nearest k is the pre-2026-09-10 behaviour, so a
