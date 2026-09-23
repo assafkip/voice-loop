@@ -308,7 +308,7 @@ def _run_prompt(prompt, claude_bin=None, timeout=TIMEOUT_SECONDS, runner=None,
         # THE REVISER WRITES, so it gets the writer's tier (2026-08-13). It edits a post
         # that is already in his voice and must not flatten it; that is the same
         # cross-source judgment the writer needs, not the cheap comparison a critic does.
-        result = subprocess.run([binary, "--model", model, "-p", prompt],
+        result = subprocess.run([binary, "--model", model, *prompt_render.NO_MCP_ARGS, "-p", prompt],
                                 capture_output=True,
                                 text=True, timeout=timeout)
     except (subprocess.SubprocessError, OSError):
