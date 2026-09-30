@@ -25,13 +25,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+
+from . import usage_ledger
 
 #: No MCP servers for a headless model call (from a real defect). Every caller of `run_model`
 #: hands text in and reads text back; none uses a tool. Without these flags each
 #: `claude -p` loads the full MCP config of its cwd and starts `npm exec
 #: @apify/actors-mcp-server`, and when the call exits that npm/node pair is not
-#: always killed. Captured 2026-09-23 13:10 PT: one reddit_hourly fire made 27
+#: always killed. Captured 2026-09-23 13:10 PT: one hourly job fire made 27
 #: calls and left 7 apify servers reparented to launchd, and an earlier day's
 #: orphans grew swap from 8 GB to 18 GB and took free disk to 0.55 GB. An empty
 #: strict config means nothing is spawned, so there is nothing to orphan.
@@ -95,8 +98,37 @@ def count_constraints(prompt):
     return len(CONSTRAINT_LINE.findall(instruction_section(prompt)))
 
 
+def _meter(row_fn, *args, **kwargs):
+    """Build and append one ledger row, swallowing anything the ledger raises.
+
+    THE METER CAN NEVER FAIL THE CALL, on any path. Round 5 guarded only the
+    success arm; round 6 showed the timeout and non-zero-exit arms raising out
+    of failure_row on a malformed usage value. Every ledger write goes through
+    here now, so there is no unguarded arm left.
+    """
+    try:
+        usage_ledger.append(row_fn(*args, **kwargs))
+    except Exception as exc:  # noqa: BLE001
+        try:
+            usage_ledger.append(usage_ledger.failure_row(
+                "meter:" + type(exc).__name__, stderr=str(exc)[:200],
+                bot=kwargs.get("bot") or "voiceloop", job=kwargs.get("job"), model=kwargs.get("model")))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def subscription_env():
+    """os.environ without ANTHROPIC_API_KEY: the env every headless `claude` call runs in.
+
+    Subscription only, never the billed API (founder, 2026-09-28): claude prefers
+    the key over the subscription login, so an inherited key turns every call
+    through here into metered spend. Pinned by test-subscription-only.sh (from a real defect).
+    """
+    return {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+
+
 def run_model(prompt, claude_bin, timeout=TIMEOUT_SECONDS, runner=None,
-              caller="run_model()", under_test="raise", model=None):
+              caller="run_model()", under_test="raise", model=None, allow_opencode=True):
     """THE model call. One implementation, so every caller gets the same guarantees.
 
     why one (2026-08-06, founder-directed): "you shouldn't invent a new mechanism. we
@@ -135,7 +167,7 @@ def run_model(prompt, claude_bin, timeout=TIMEOUT_SECONDS, runner=None,
             "run_model needs an explicit claude_bin; the engine has no default binary "
             "because a default would be one machine's path shipped fleet-wide")
     binary = claude_bin
-    if os.environ.get("OPENCODE") and shutil.which("opencode"):
+    if allow_opencode and os.environ.get("OPENCODE") and shutil.which("opencode"):
         try:
             # The writer is already inside the voice loop. Reloading the global
             # voice-loop plugin here recurses on the prompt and can fail before
@@ -145,9 +177,11 @@ def run_model(prompt, claude_bin, timeout=TIMEOUT_SECONDS, runner=None,
             if active_model:
                 args.extend(["--model", active_model])
             args.append(prompt)
+            # env: OpenCode reads ANTHROPIC_API_KEY too, so this branch gets the
+            # same subscription-only env as the claude branch (a reviewer, #464).
             result = subprocess.run(
                 args, capture_output=True, text=True,
-                timeout=timeout)
+                timeout=timeout, env=subscription_env())
             if result.returncode == 0:
                 parts = []
                 for line in result.stdout.splitlines():
@@ -157,19 +191,69 @@ def run_model(prompt, claude_bin, timeout=TIMEOUT_SECONDS, runner=None,
                         continue
                     if event.get("type") == "text":
                         parts.append(event.get("part", {}).get("text", ""))
-                return "".join(parts).strip() or None
-        except (subprocess.SubprocessError, OSError):
+                # an earlier fix: this provider reports no usage, so the row says so
+                # (tokens None) rather than leaving the run invisible. `ok` is
+                # whether the CALLER got text: a dead run is not a clean one.
+                text = "".join(parts).strip() or None
+                _meter(usage_ledger.failure_row, "opencode", ok=text is not None,
+                       bot=os.environ.get("CHIEF_BOT") or "voiceloop",
+                       job=os.environ.get("CHIEF_JOB") or caller, model=active_model)
+                return text
+        except (subprocess.SubprocessError, OSError) as exc:
+            _meter(usage_ledger.failure_row, f"opencode:{type(exc).__name__}", stderr=str(exc),
+                   bot=os.environ.get("CHIEF_BOT") or "voiceloop",
+                   job=os.environ.get("CHIEF_JOB") or caller, model=active_model)
             return None
     if not os.path.exists(binary):
+        _meter(usage_ledger.failure_row, "no-binary", stderr=f"claude_bin not found: {binary}",
+               bot=os.environ.get("CHIEF_BOT") or "voiceloop",
+               job=os.environ.get("CHIEF_JOB") or caller, model=model)
         return None
+    # an earlier fix: the call is metered. Every path below leaves one row, the failures
+    # included: a limit refusal, a timeout that burned tokens before the kill, a
+    # non-zero exit. On 2026-09-12 the fleet went dark for a day and a ledger that
+    # skipped failed calls would have looked identical to an idle fleet (a review
+    # review). Every row goes through _meter, so no arm can raise out of here.
+    who = dict(bot=os.environ.get("CHIEF_BOT") or "voiceloop",
+               job=os.environ.get("CHIEF_JOB") or caller, model=model)
     try:
         # `--model` only when a caller asked for one, so every existing caller keeps the
         # CLI's own default and this stays additive.
-        argv = [binary, *NO_MCP_ARGS, "-p", prompt]
+        argv = [binary, *NO_MCP_ARGS, "-p", prompt, *usage_ledger.JSON_FLAGS]
         if model:
             argv[1:1] = ["--model", model]
         result = subprocess.run(argv, capture_output=True,
-                                text=True, timeout=timeout)
-    except (subprocess.SubprocessError, OSError):
+                                text=True, timeout=timeout, env=subscription_env())
+    except subprocess.TimeoutExpired as exc:
+        _meter(usage_ledger.failure_row, "timeout", stdout=exc.stdout, stderr=exc.stderr, **who)
         return None
-    return result.stdout if result.returncode == 0 else None
+    except (subprocess.SubprocessError, OSError) as exc:
+        _meter(usage_ledger.failure_row, type(exc).__name__, stderr=str(exc), **who)
+        return None
+    if result.returncode != 0 and usage_ledger.rejected_flag(result.stderr):
+        # An older CLI that does not know --output-format json: fall back to the
+        # plain call so the fleet keeps working, and record an unmetered row.
+        try:
+            result = subprocess.run([a for a in argv if a not in usage_ledger.JSON_FLAGS],
+                                    capture_output=True, text=True, timeout=timeout,
+                                    env=subscription_env())
+        except (subprocess.SubprocessError, OSError) as exc:
+            _meter(usage_ledger.failure_row, type(exc).__name__, stderr=str(exc), **who)
+            return None
+        ok = result.returncode == 0
+        _meter(usage_ledger.failure_row, "cli:no-json-flag", ok=ok, stderr=result.stderr, **who)
+        return result.stdout if ok else None
+    if result.returncode != 0:
+        _meter(usage_ledger.failure_row, f"exit {result.returncode}",
+               stdout=result.stdout, stderr=result.stderr, **who)
+        return None
+    # `finish` hands back the same bytes a plain call printed (result + newline).
+    try:
+        text, row = usage_ledger.finish(result.stdout, **who)
+    except Exception as exc:  # noqa: BLE001
+        # A malformed document is the ledger's problem, not the caller's: the
+        # plain text is handed back exactly as an unmetered call would have.
+        _meter(usage_ledger.failure_row, "meter:" + type(exc).__name__, stderr=str(exc), **who)
+        return usage_ledger.plain_text(result.stdout)
+    _meter(lambda: row)
+    return text  # None when the CLI answered with an error document
