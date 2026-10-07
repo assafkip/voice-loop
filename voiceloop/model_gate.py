@@ -85,13 +85,46 @@ def gate_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".config", "voiceloop", "model-gate")
 
 
+_SENDER = os.path.join("q-system", ".q-system", "scripts", "slack-notify.sh")
+
+
+def _sender() -> str | None:
+    """The fleet alert script, from a source checkout or from a plugin install.
+
+    why the second rung (from a real defect): Claude runs this module from the plugin cache,
+    cache/voiceloop/voiceloop/<ver>/voiceloop/, where three levels up is cache/voiceloop and
+    there is no q-system. The send exited 127 and every refusal alert from an
+    installed plugin was lost. The marketplace clone Claude records for `voiceloop` is
+    a full checkout of the source repo, so it carries the sender; read the record rather
+    than hardcode its path, the same move chief made for voiceloop in its a review.
+    """
+    if os.environ.get("VOICE_LOOP_NOTIFY"):
+        return os.environ["VOICE_LOOP_NOTIFY"]
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [os.path.join(here, "..", "..", "..", _SENDER)]
+    plugins = os.path.join(os.path.expanduser("~"), ".claude", "plugins")
+    try:
+        with open(os.path.join(plugins, "known_marketplaces.json"), encoding="utf-8") as fh:
+            loc = (json.load(fh).get("voiceloop") or {}).get("installLocation")
+        if isinstance(loc, str) and loc:
+            candidates.append(os.path.join(loc, _SENDER))
+    except (OSError, ValueError, AttributeError):
+        pass  # a missing or odd record must cost the alert, never the gate's verdict
+    # Last rung, the conventional clone path: a Claude upgrade that reshapes the
+    # record must not silently lose the alert again (a review review).
+    candidates.append(os.path.join(plugins, "marketplaces", "voiceloop", _SENDER))
+    return next((c for c in candidates if os.path.isfile(c)), None)
+
+
 def _notify(text: str) -> None:
     """One send, never retried. The caller already recorded that it alerted."""
     if not os.environ.get("VOICE_LOOP_NOTIFY") and _under_pytest():
         return  # a suite never files a real ticket
-    script = os.environ.get("VOICE_LOOP_NOTIFY") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "..",
-        "q-system", ".q-system", "scripts", "slack-notify.sh")
+    script = _sender()
+    if script is None:
+        print(f"model_gate: no alert sender found (no q-system beside the plugin, no voiceloop "
+              f"marketplace record); not sent: {text}", file=sys.stderr)
+        return
     try:
         rc = subprocess.run(["bash", script, text], capture_output=True, timeout=30).returncode
     except (OSError, subprocess.SubprocessError) as exc:
