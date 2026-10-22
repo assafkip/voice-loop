@@ -9,3 +9,7 @@ venv/
 corpus/exemplars.jsonl
 corpus/corrections.jsonl
 corpus/fingerprint.json
+
+# A local `pip install .` writes build/. It is never published: a tracked copy
+# is a second engine copy that no export or check covers.
+build/
