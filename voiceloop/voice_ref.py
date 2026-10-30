@@ -50,7 +50,7 @@ CORPUS_ENV = "VOICE_LOOP_CORPUS"
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--channel", required=True, choices=["x", "linkedin"])
+    ap.add_argument("--channel", required=True, choices=["x", "threads", "linkedin"])
     ap.add_argument("--words", type=int, required=True,
                     help="target length of the piece being written")
     ap.add_argument("-k", type=int, default=selector.DEFAULT_K)
