@@ -8,11 +8,15 @@ version of this change proved by reverting all five and watching the suite stay 
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import pytest
 
-from voiceloop import channel_registry, corpus, form, reply_format, voice_ref, x_format
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
+
+from voiceloop import channel_registry, corpus, form, reply_format, voice_ref, x_format  # noqa: E402
 
 
 def test_threads_is_a_short_form_channel_and_x_still_is():
