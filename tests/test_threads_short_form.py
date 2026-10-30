@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -55,10 +56,13 @@ def test_the_dwell_floor_reaches_threads_and_names_no_platform(tmp_path):
 
 
 def test_a_threads_length_finding_names_no_platform_and_x_keeps_its_words():
-    threads = x_format.length_violations("a" * 600, "threads")[0]["detail"]
-    x = x_format.length_violations("a" * 600, "x")[0]["detail"]
-    assert "X " not in threads and "short-form" in threads
-    assert "X shows about" in x
+    # Both branches (the fold warn and the ceiling block), and X as a whole word in any
+    # position ("X.", "X's"), per the #565 review.
+    for body in ("a" * 600, "a" * 30000):
+        threads = x_format.length_violations(body, "threads")[0]["detail"]
+        assert not re.search(r"\bX\b", threads) and "short-form" in threads, threads
+    assert "X shows about" in x_format.length_violations("a" * 600, "x")[0]["detail"]
+    assert "X truncates" in x_format.length_violations("a" * 30000, "x")[0]["detail"]
 
 
 def test_voice_ref_takes_threads_and_still_refuses_an_unknown_channel(monkeypatch, tmp_path):
